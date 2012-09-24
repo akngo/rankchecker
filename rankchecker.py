@@ -55,7 +55,13 @@ if __name__ == '__main__':
     #print config['limits']['delay']
     campaigns = Campaigns('campaigns.ini')
     checker = RankChecker(config, campaigns)
-    checker.get_ranks()
+
+    try:
+        checker.get_ranks()
+    except:
+        # Ignore all errors and hopefully it can print out whatever it can
+        # before exiting
+        pass
 
     sys.stderr.write('\n\nRanking results:\n')
     for campaign, keywords in campaigns.get_campaigns().iteritems():
