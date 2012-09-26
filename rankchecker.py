@@ -119,7 +119,7 @@ if __name__ == '__main__':
     parser.add_argument('--config',
                         default='config.json',
                         help='the name of the config file')
-    parser.add_argument('--campaign',
+    parser.add_argument('--campaigns',
                         default='campaigns.ini',
                         help='the name of the campaign file')
     args = parser.parse_args()
