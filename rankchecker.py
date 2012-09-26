@@ -1,13 +1,27 @@
+import os
 import time
+import traceback
 import sys
+
+from collections import deque
 
 from campaigns import Campaigns
 from xgoogle.search import GoogleSearch
+from xgoogle.search import SearchError
+
+verbose = True
 
 class RankChecker:
     def __init__(self, config, campaigns):
         self.config = config
         self.campaigns = campaigns
+        self.init_proxies(config['proxies'])
+
+    def init_proxies(self, proxies):
+        self.proxies = deque(proxies)
+        self.failed_proxies = {}
+        for proxy in proxies:
+            self.failed_proxies[proxy] = 0
 
     def get_ranks(self):
         for keyword, urls in campaigns.get_keywords().iteritems():
@@ -15,10 +29,12 @@ class RankChecker:
             gs.results_per_page = self.config['limits']['results_per_page']
 
             sys.stderr.write('\n\nChecking keyword: %s\n' % keyword)
-            results = gs.get_results()
+            results = self.get_results(gs)
             offset = 1
+            query_count = 0
             while len(urls) > 0 and results:
                 # Display a period for every hit we make to Google
+                if query_count % 5 == 0: sys.stderr.write(' ')
                 sys.stderr.write('.')
 
                 for rank, row in enumerate(results):
@@ -45,15 +61,74 @@ class RankChecker:
                 # surpassed our maximum configured depth
                 if (len(urls) > 0 and
                         offset <= self.config['limits']['search_depth'] + 1):
-                    results = gs.get_results()
+                    results = self.get_results(gs)
+                    query_count += 1
+                elif verbose:
+                    sys.stderr.write('Not retrieving more results\n')
+
+                if verbose:
+                    sys.stderr.write('URLs: %s\n' % ', '.join(urls))
+                    if results:
+                        sys.stderr.write('Results: %s\n' % len(results))
+
+    def get_results(self, gs):
+        # Setting the proxy by utilizing the http_proxy environment variable
+        while len(self.proxies) > 0:
+            proxy = self.proxies[0]
+            self.proxies.rotate(-1)
+            if verbose:
+                sys.stderr.write('Using proxy: %s\n' % proxy)
+            os.environ['http_proxy'] = proxy
+
+            try:
+                result = gs.get_results()
+
+                # Success will mean we need to reset failed attempts to 0
+                self.failed_proxies[proxy] = 0
+
+                return result
+            except SearchError, e:
+                self.failed_proxies[proxy] += 1
+
+                # Failed 3 consecutive times, remove from list of proxies
+                cfg = self.config
+                if (self.failed_proxies[proxy] >=
+                        cfg['limits']['proxy_retries']):
+                    # pop() from the right, which is the targeted proxy
+                    # because of the rotate(-1) we did earlier
+                    self.proxies.pop()
+
+                # Just to be safe, we sleep before retrying
+                time.sleep(self.config['limits']['delay'])
+                pass
+
+        # If we reach here and the length of failed_proxies is not 0, it means
+        # that we have failed on all the proxies. We throw an exception
+        if len(self.failed_proxies) > 0:
+            raise Exception('Ran out of proxies')
+
+        # Normal case, no proxies are used
+        return gs.get_results()
 
 
 if __name__ == '__main__':
+    import argparse
     from config import Config
-    config = Config('config.json').get_config()
-    #print config['limits']['results_per_page']
-    #print config['limits']['delay']
-    campaigns = Campaigns('campaigns.ini')
+
+    parser = argparse.ArgumentParser(description='Check your ranks on Google')
+    parser.add_argument('--config',
+                        default='config.json',
+                        help='the name of the config file')
+    parser.add_argument('--campaign',
+                        default='campaigns.ini',
+                        help='the name of the campaign file')
+    args = parser.parse_args()
+
+    config = Config(args.config).get_config()
+    if verbose:
+        print 'Delay between requests: %s\n' % config['limits']['delay']
+
+    campaigns = Campaigns(args.campaign)
     checker = RankChecker(config, campaigns)
 
     try:
@@ -61,6 +136,7 @@ if __name__ == '__main__':
     except:
         # Ignore all errors and hopefully it can print out whatever it can
         # before exiting
+        traceback.print_exc()
         pass
 
     sys.stderr.write('\n\nRanking results:\n')
